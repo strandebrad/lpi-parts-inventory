@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Parts Inventory</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📦</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<style>
+
+:root{
+  --paper:#F2F4F7; --surface:#FFFFFF; --ink:#17202B; --muted:#5A6473; --line:#D7DCE3;
+  --signal:#FFC629; --signal-ink:#17202B; --ok:#1E7A4C; --bad:#B3261E; --chip:#E9EDF2;
+  color-scheme:light;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#0E1217; --surface:#171D25; --ink:#E7EBF0; --muted:#97A1AF; --line:#29313C;
+    --signal:#FFC629; --signal-ink:#17202B; --ok:#5CC48F; --bad:#FF8A80; --chip:#212833;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0E1217; --surface:#171D25; --ink:#E7EBF0; --muted:#97A1AF; --line:#29313C;
+  --signal:#FFC629; --signal-ink:#17202B; --ok:#5CC48F; --bad:#FF8A80; --chip:#212833;
+  color-scheme:dark;
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--paper);color:var(--ink);font:400 16px/1.45 Barlow,"Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+button,input{font:inherit;color:inherit}
+:focus-visible{outline:3px solid var(--signal);outline-offset:2px}
+.wrap{max-width:760px;margin:0 auto;padding:20px 16px 48px}
+
+header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:18px}
+h1{font:700 2rem/1 "Barlow Condensed","Arial Narrow",sans-serif;margin:0;letter-spacing:.01em}
+.totals{color:var(--muted);font-variant-numeric:tabular-nums;text-align:right}
+.totals b{color:var(--ink);font-weight:600}
+
+/* The scan button: a shipping label you press */
+.scan{display:flex;align-items:stretch;width:100%;border:0;padding:0;cursor:pointer;background:var(--signal);color:var(--signal-ink);border-radius:6px;overflow:hidden;min-height:112px;text-align:left}
+.scan .bars{width:68px;flex:none;background:
+  repeating-linear-gradient(90deg,var(--signal-ink) 0 3px,transparent 3px 5px,var(--signal-ink) 5px 6px,transparent 6px 10px,var(--signal-ink) 10px 14px,transparent 14px 16px,var(--signal-ink) 16px 17px,transparent 17px 21px);
+  margin:16px 0 16px 18px;opacity:.9}
+.scan .txt{padding:18px 20px;display:flex;flex-direction:column;justify-content:center}
+.scan strong{font:700 2.1rem/1 "Barlow Condensed","Arial Narrow",sans-serif}
+.scan span{font-weight:500;margin-top:6px}
+.scan:active{filter:brightness(.95)}
+.scan:has(input:disabled){opacity:.6;cursor:progress}
+.scan:focus-within{outline:3px solid var(--ink);outline-offset:2px}
+.scan .bars,.scan .txt,.scan strong,.scan span{display:block}
+.scan .txt{display:flex}
+.vh{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;clip:rect(0 0 0 0)}
+
+.controls{margin-top:12px}
+.stepper{display:flex;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:6px}
+.stepper button{width:40px;height:44px;border:0;background:none;font-size:1.3rem;cursor:pointer}
+.stepper input{width:48px;text-align:center;border:0;background:none;font-weight:600;font-variant-numeric:tabular-nums;-moz-appearance:textfield}
+.stepper input::-webkit-inner-spin-button{-webkit-appearance:none}
+.stepper label{padding-left:12px;color:var(--muted);font-size:.9rem;white-space:nowrap}
+.manual{display:flex;background:var(--surface);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.manual input{flex:1;min-width:0;border:0;background:none;padding:0 12px;height:44px}
+.manual button{border:0;background:var(--chip);padding:0 16px;font-weight:600;cursor:pointer}
+
+.result{margin-top:14px;display:none;gap:12px;align-items:center;background:var(--surface);border:1px solid var(--line);border-left:6px solid var(--muted);border-radius:6px;padding:12px}
+.result.show{display:flex}
+.result.ok{border-left-color:var(--ok)}
+.result.bad{border-left-color:var(--bad)}
+.result.busy{border-left-color:var(--signal)}
+.result img{width:56px;height:56px;object-fit:cover;border-radius:4px;flex:none;background:var(--chip)}
+.result .msg{flex:1;min-width:0}
+.result .msg b{font-weight:600}
+.result .sub{color:var(--muted);font-size:.92rem}
+.result button{border:1px solid var(--line);background:none;border-radius:6px;padding:8px 12px;cursor:pointer;font-weight:600}
+.review{display:none;margin-top:14px;background:var(--surface);border:1px solid var(--line);border-top:6px solid var(--signal);border-radius:6px;padding:14px;gap:12px}
+.review.show{display:grid}
+.rv-top{display:flex;gap:12px;align-items:center}
+.rv-top img{width:64px;height:64px;object-fit:cover;border-radius:4px;background:var(--chip);flex:none}
+.rv-stock{color:var(--muted);font-weight:500}
+.review > label,.review .two label{display:grid;gap:4px;font-size:.88rem;color:var(--muted)}
+.review .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.review input:not([type=number]){height:44px;border:1px solid var(--line);border-radius:6px;background:var(--paper);padding:0 10px;color:var(--ink);font-size:1rem;width:100%}
+.review .pnIn{font:700 1.35rem "Barlow Condensed","Arial Narrow",sans-serif}
+.rv-hint{color:var(--bad);font-size:.9rem;margin:0}
+.stepper.big{width:max-content}
+.rv-act{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.rv-act button{height:54px;border-radius:6px;font:700 1.4rem "Barlow Condensed","Arial Narrow",sans-serif;cursor:pointer;border:2px solid var(--ink);background:none;color:var(--ink)}
+.rv-act .recv{background:var(--signal);color:var(--signal-ink);border-color:var(--signal)}
+.rv-cancel{justify-self:center;border:0;background:none;color:var(--muted);text-decoration:underline;cursor:pointer;padding:6px 12px}
+.spinner{width:20px;height:20px;border:3px solid var(--line);border-top-color:var(--signal);border-radius:50%;animation:spin .8s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spinner{animation-duration:3s}}
+
+.listhead{display:flex;gap:10px;align-items:center;margin:32px 0 10px}
+h2{font:700 1.4rem/1 "Barlow Condensed","Arial Narrow",sans-serif;margin:0;flex:1}
+.search{width:min(260px,50%);height:40px;border:1px solid var(--line);border-radius:6px;background:var(--surface);padding:0 12px}
+.ghost{border:1px solid var(--line);background:var(--surface);border-radius:6px;height:40px;padding:0 12px;cursor:pointer;font-weight:600}
+
+ul{list-style:none;margin:0;padding:0;background:var(--surface);border:1px solid var(--line);border-radius:6px}
+li+li{border-top:1px solid var(--line)}
+.row{display:grid;grid-template-columns:48px 1fr auto;gap:12px;align-items:center;padding:10px 12px;width:100%;background:none;border:0;text-align:left;cursor:pointer}
+.row .th{width:48px;height:48px;border-radius:4px;background:var(--chip);object-fit:cover;display:block}
+.pn{font:700 1.25rem/1.1 "Barlow Condensed","Arial Narrow",sans-serif;overflow-wrap:anywhere}
+.desc{color:var(--muted);font-size:.92rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qty{font:700 1.6rem/1 "Barlow Condensed","Arial Narrow",sans-serif;font-variant-numeric:tabular-nums;text-align:right;min-width:3ch}
+.qty small{display:block;font:500 .75rem Barlow,sans-serif;color:var(--muted)}
+.detail{padding:4px 12px 16px 72px;display:grid;gap:10px}
+.detail label{display:grid;gap:4px;font-size:.88rem;color:var(--muted)}
+.detail input{height:40px;border:1px solid var(--line);border-radius:6px;background:var(--paper);padding:0 10px;color:var(--ink);font-size:1rem}
+.detail .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.adj{display:flex;gap:8px;flex-wrap:wrap}
+.adj button{border:1px solid var(--line);background:var(--paper);border-radius:6px;height:38px;padding:0 14px;cursor:pointer;font-weight:600}
+.adj .del{margin-left:auto;color:var(--bad)}
+.hist{font-size:.88rem;color:var(--muted);margin:0;padding:0}
+.hist div{display:flex;justify-content:space-between;padding:3px 0;font-variant-numeric:tabular-nums}
+.empty{padding:28px 16px;text-align:center;color:var(--muted)}
+li.grp-m{padding:16px 12px 2px;font:700 1.3rem/1.1 "Barlow Condensed","Arial Narrow",sans-serif;background:var(--paper)}
+li.grp-m:first-child{padding-top:10px}
+li.grp-t{padding:2px 12px 8px;color:var(--muted);font-weight:600;font-size:.92rem;background:var(--paper);border-top:0!important}
+.note{color:var(--muted);font-size:.88rem;margin-top:10px}
+.hide{display:none!important}
+@media (max-width:520px){
+  .controls{grid-template-columns:1fr}
+  .detail{padding-left:12px}
+  .listhead{flex-wrap:wrap}
+  .search{width:100%;order:3}
+}
+
+.setup{background:var(--surface);border:1px solid var(--line);border-top:6px solid var(--signal);border-radius:6px;padding:16px;display:grid;gap:10px}
+.setup p{margin:0;color:var(--muted)}
+.setup input{height:44px;border:1px solid var(--line);border-radius:6px;background:var(--paper);padding:0 10px;color:var(--ink);font-size:1rem;width:100%}
+.setup button{height:48px;border:0;border-radius:6px;background:var(--signal);color:var(--signal-ink);font:700 1.3rem "Barlow Condensed","Arial Narrow",sans-serif;cursor:pointer}
+.chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.chips span{color:var(--muted);font-size:.9rem}
+.chips button{border:1px solid var(--line);background:var(--paper);border-radius:999px;padding:4px 12px;cursor:pointer;font-weight:600}
+.rv-act button[disabled]{opacity:.6;cursor:progress}
+.foot{margin-top:24px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;color:var(--muted);font-size:.9rem}
+.foot label{display:flex;gap:8px;align-items:center}
+.foot input{height:38px;border:1px solid var(--line);border-radius:6px;background:var(--surface);padding:0 10px;color:var(--ink);width:160px}
+.when{color:var(--muted);font-size:.88rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Parts Inventory</h1>
+    <div class="totals" id="totals"></div>
+  </header>
+
+  <section class="setup hide" id="setup">
+    <h2>Connect your inventory sheet</h2>
+    <p>Paste the web app URL from your Google Apps Script deployment. It starts with https://script.google.com and ends in /exec.</p>
+    <input id="apiIn" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off">
+    <button type="button" id="apiBtn">Connect</button>
+    <p class="rv-hint hide" id="apiErr"></p>
+  </section>
+
+  <main id="app" class="hide">
+    <label class="scan" id="scanBtn">
+      <span class="bars" aria-hidden="true"></span>
+      <span class="txt"><strong>Scan a part</strong><span>Photo of a barcode or QR code</span></span>
+      <input type="file" id="photo" accept="image/*" capture="environment" class="vh">
+    </label>
+
+    <div class="controls">
+      <form class="manual" id="manualForm">
+        <input id="manualIn" placeholder="Type a part number or use a USB scanner" autocomplete="off" aria-label="Part number">
+        <button type="submit">Open</button>
+      </form>
+    </div>
+
+    <div class="review" id="review"></div>
+    <div class="result" id="result" role="status" aria-live="polite"></div>
+
+    <div class="listhead">
+      <h2>Inventory</h2>
+      <input class="search" id="search" type="search" placeholder="Search parts" aria-label="Search parts">
+      <button class="ghost" id="exportBtn" type="button">Export CSV</button>
+    </div>
+    <ul id="list"></ul>
+    <p class="note" id="storeNote"></p>
+
+    <div class="foot">
+      <label>Your name <input id="nameIn" placeholder="Shows in the log" autocomplete="name"></label>
+      <button class="ghost" id="shareBtn" type="button">Copy link for others</button>
+      <button class="ghost" id="changeApi" type="button">Change sheet</button>
+    </div>
+  </main>
+</div>
+
+<script>
+// Optional: paste the Apps Script web app URL here so nobody sees the setup screen.
+const API_URL = "https://script.google.com/macros/s/AKfycbx8vf4ODQmBuS27jtdaB7-qALkL9Kr1MQ-L_VXbvlo_b1ertdkQ9RO1d23Jb_16oi7STg/exec";
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const norm = s => String(s ?? "").trim().replace(/\s+/g, " ");
+const idFor = pn => norm(pn).toUpperCase();
+const LS = {
+  get: k => { try { return localStorage.getItem(k) || ""; } catch { return ""; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }
+};
+
+let api = API_URL;
+{
+  const m = location.hash.match(/api=([^&]+)/);
+  if (m){ api = decodeURIComponent(m[1]); LS.set("partsApi", api); history.replaceState(null, "", location.pathname); }
+}
+if (!api) api = LS.get("partsApi");
+
+let parts = new Map();
+let openId = null, filter = "", lastUndo = null, pendingRender = false, pending = null;
+
+/* ---------- sheet sync ---------- */
+async function apiGet(url = api){
+  const r = await fetch(url + (url.includes("?") ? "&" : "?") + "t=" + Date.now());
+  const j = await r.json();
+  if (!j.ok) throw Object.assign(new Error(j.error || "Load failed"), { server: true });
+  return j;
+}
+async function apiPost(body){
+  const r = await fetch(api, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ ...body, by: $("#nameIn").value.trim() }) });
+  const j = await r.json();
+  if (!j.ok) throw Object.assign(new Error(j.error || "Save failed"), { server: true });
+  return j;
+}
+function setSync(ok){
+  $("#storeNote").textContent = ok ? "Synced with the inventory Google Sheet." : "Can’t reach the inventory sheet. Check your connection. It will keep retrying.";
+}
+async function refresh(){
+  if (!api) return;
+  try {
+    const j = await apiGet();
+    parts = new Map(j.parts.map(p => [p.id, p]));
+    setSync(true);
+    requestRender();
+  } catch { setSync(false); }
+}
+
+/* ---------- review card ---------- */
+function datalists(){
+  const opts = f => [...new Set([...parts.values()].map(p => norm(p[f])).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b)).map(x => `<option value="${esc(x)}">`).join("");
+  return `<datalist id="dlMfr">${opts("manufacturer")}</datalist><datalist id="dlType">${opts("machineType")}</datalist><datalist id="dlMach">${opts("machine")}</datalist>`;
+}
+
+function receive(pnRaw, info = {}){
+  const pn = norm(pnRaw).slice(0, 120);
+  if (!pn && !info.thumb) return;
+  const prev = parts.get(idFor(pn));
+  pending = { info };
+  $("#result").className = "result";
+  const v = (a, b) => esc(a || b || "");
+  const el = $("#review");
+  el.innerHTML = `
+    <div class="rv-top">
+      ${info.thumb ? `<img src="${esc(info.thumb)}" alt="">` : ""}
+      <div class="rv-stock" id="rvStock"></div>
+    </div>
+    <label>Part number<input id="rvPn" class="pnIn" value="${esc(pn)}" autocomplete="off"></label>
+    ${info.others?.length ? `<div class="chips"><span>Other codes in the photo:</span>${info.others.map(o => `<button type="button" data-code="${esc(o)}">${esc(o)}</button>`).join("")}</div>` : ""}
+    <label>Manufacturer<input id="rvMfr" list="dlMfr" value="${v(prev?.manufacturer)}"></label>
+    <div class="two">
+      <label>Machine type<input id="rvType" list="dlType" value="${v(prev?.machineType)}"></label>
+      <label>Machine<input id="rvMach" list="dlMach" value="${v(prev?.machine)}"></label>
+    </div>
+    <div class="two">
+      <label>Description<input id="rvDesc" value="${v(prev?.description)}"></label>
+      <label>Bin / location<input id="rvLoc" value="${v(prev?.location)}"></label>
+    </div>
+    ${datalists()}
+    ${info.note ? `<p class="rv-hint">${esc(info.note)}</p>` : ""}
+    <div class="stepper big">
+      <label for="rvQty">Quantity</label>
+      <button type="button" id="rvDown" aria-label="Less">−</button>
+      <input id="rvQty" type="number" min="1" value="1" inputmode="numeric">
+      <button type="button" id="rvUp" aria-label="More">+</button>
+    </div>
+    <p class="rv-hint hide" id="rvErr"></p>
+    <div class="rv-act">
+      <button type="button" class="recv" id="rvRecv">Receive</button>
+      <button type="button" id="rvUse">Use</button>
+    </div>
+    <button type="button" class="rv-cancel" id="rvCancel">Cancel</button>`;
+  el.classList.add("show");
+  const qty = () => Math.max(1, parseInt($("#rvQty").value, 10) || 1);
+  const fill = () => {
+    const p = parts.get(idFor($("#rvPn").value));
+    $("#rvStock").textContent = !norm($("#rvPn").value) ? "Enter the part number" : p ? `${p.qty || 0} on hand now` : "New part, not in inventory yet";
+    if (p){
+      [["#rvMfr","manufacturer"],["#rvType","machineType"],["#rvMach","machine"],["#rvDesc","description"],["#rvLoc","location"]]
+        .forEach(([sel, f]) => { if (!$(sel).value) $(sel).value = p[f] || ""; });
+    }
+  };
+  fill();
+  $("#rvPn").oninput = fill;
+  el.querySelectorAll("[data-code]").forEach(b => b.onclick = () => { $("#rvPn").value = b.dataset.code; fill(); });
+  $("#rvUp").onclick = () => { $("#rvQty").value = qty() + 1; };
+  $("#rvDown").onclick = () => { $("#rvQty").value = Math.max(1, qty() - 1); };
+  $("#rvRecv").onclick = () => commit("receive", qty());
+  $("#rvUse").onclick = () => commit("use", qty());
+  $("#rvCancel").onclick = closeReview;
+  el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  if (!pn) $("#rvPn").focus();
+}
+
+function closeReview(){
+  pending = null;
+  $("#review").classList.remove("show");
+  $("#review").innerHTML = "";
+}
+
+async function commit(kind, q){
+  const info = pending?.info || {};
+  const pn = norm($("#rvPn").value).slice(0, 120);
+  const err = m => { const e = $("#rvErr"); e.textContent = m; e.classList.remove("hide"); };
+  if (!pn) return err("Enter a part number.");
+  if (kind === "use" && !parts.has(idFor(pn))) return err("This part isn’t in inventory yet. Receive it first.");
+  const fields = { manufacturer: $("#rvMfr").value, machineType: $("#rvType").value, machine: $("#rvMach").value,
+    description: $("#rvDesc").value, location: $("#rvLoc").value };
+  const btn = $(kind === "use" ? "#rvUse" : "#rvRecv"), label = btn.textContent;
+  $("#rvRecv").disabled = $("#rvUse").disabled = true;
+  btn.textContent = "Saving…";
+  try {
+    const res = await apiPost({ action: "move", partNumber: pn, delta: kind === "use" ? -q : q, fields,
+      thumb: info.thumb || "", how: kind === "use" ? "used" : (info.how || "typed") });
+    parts.set(res.part.id, res.part);
+    lastUndo = res.logId;
+    closeReview();
+    requestRender();
+    const short = kind === "use" && res.before < q ? ` Only ${res.before} were on hand.` : "";
+    showResult("ok", `${kind === "use" ? "Used" : "Received"} ${q} × ${res.part.partNumber}`, `${res.part.qty} on hand.${short}`, res.part.thumb, true);
+  } catch (e) {
+    $("#rvRecv").disabled = $("#rvUse").disabled = false;
+    btn.textContent = label;
+    err(e.server ? e.message : "Couldn’t save. Check your connection and try again.");
+  }
+}
+
+async function undo(){
+  if (!lastUndo) return;
+  const id = lastUndo; lastUndo = null;
+  showResult("busy", "Undoing…", "");
+  try {
+    await apiPost({ action: "undo", logId: id });
+    await refresh();
+    showResult("", "Undone.", "");
+  } catch (e) {
+    showResult("bad", "Couldn’t undo.", e.server ? e.message : "Adjust the quantity in the list instead.");
+  }
+}
+
+/* ---------- photo scanning ---------- */
+function loadImage(file){
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => res(img);
+    img.onerror = () => rej(new Error("bad image"));
+    img.src = URL.createObjectURL(file);
+  });
+}
+function toCanvas(img, max){
+  const s = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+  const c = document.createElement("canvas");
+  c.width = Math.round(img.naturalWidth * s); c.height = Math.round(img.naturalHeight * s);
+  c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+  return c;
+}
+function thumbOf(img){
+  const c = document.createElement("canvas"), n = 120;
+  const side = Math.min(img.naturalWidth, img.naturalHeight);
+  c.width = c.height = n;
+  c.getContext("2d").drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, n, n);
+  return c.toDataURL("image/jpeg", 0.6);
+}
+async function detectNative(canvas){
+  if (!("BarcodeDetector" in window)) return [];
+  try {
+    const found = await new BarcodeDetector().detect(canvas);
+    return found.map(b => ({ text: b.rawValue, format: b.format })).filter(b => b.text);
+  } catch { return []; }
+}
+function detectZxing(canvas){
+  if (!window.ZXing) return [];
+  try {
+    const hints = new Map(); hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    const reader = new ZXing.MultiFormatReader(); reader.setHints(hints);
+    const bmp = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.HTMLCanvasElementLuminanceSource(canvas)));
+    const r = reader.decode(bmp);
+    return r ? [{ text: r.getText(), format: String(ZXing.BarcodeFormat[r.getBarcodeFormat()] || "code").toLowerCase() }] : [];
+  } catch { return []; }
+}
+
+async function processPhoto(file){
+  $("#photo").disabled = true;
+  try {
+    let img;
+    try { img = await loadImage(file); }
+    catch { showResult("bad", "That file isn’t a photo this browser can open.", "Try taking the picture again."); return; }
+    const thumb = thumbOf(img);
+    showResult("busy", "Looking for a barcode…", "", thumb);
+    const canvas = toCanvas(img, 1600);
+    let codes = await detectNative(canvas);
+    if (!codes.length) codes = detectZxing(canvas);
+    codes = codes.map(c => ({ ...c, text: norm(c.text) })).filter((c, i, a) => c.text && a.findIndex(x => x.text === c.text) === i);
+    if (!codes.length){
+      receive("", { thumb, how: "typed", note: "No barcode or QR code found. Type the part number, or retake the photo closer." });
+      return;
+    }
+    const chosen = codes.find(c => parts.has(idFor(c.text))) || codes[0];
+    receive(chosen.text, { thumb, how: chosen.format, others: codes.filter(c => c !== chosen).map(c => c.text) });
+  } finally {
+    $("#photo").disabled = false;
+  }
+}
+
+/* ---------- UI ---------- */
+function showResult(kind, title, sub, thumb, withUndo){
+  const el = $("#result");
+  el.className = "result show " + (kind || "");
+  el.innerHTML =
+    (kind === "busy" ? '<div class="spinner" aria-hidden="true"></div>' : "") +
+    (thumb ? `<img src="${esc(thumb)}" alt="">` : "") +
+    `<div class="msg"><b>${esc(title)}</b>${sub ? `<div class="sub">${esc(sub)}</div>` : ""}</div>` +
+    (withUndo ? '<button type="button" id="undoBtn">Undo</button>' : "");
+  if (withUndo) $("#undoBtn").onclick = undo;
+}
+function fmtDate(iso){
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + ", " + d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+function requestRender(){
+  const a = document.activeElement;
+  if (a && a.closest && a.closest(".detail") && a.tagName === "INPUT"){ pendingRender = true; return; }
+  render();
+}
+
+function render(){
+  pendingRender = false;
+  const all = [...parts.entries()];
+  const units = all.reduce((s, [, p]) => s + (p.qty || 0), 0);
+  $("#totals").innerHTML = `<b>${all.length}</b> parts<br><b>${units}</b> units on hand`;
+
+  const f = filter.toLowerCase();
+  const shown = f ? all.filter(([, p]) => [p.partNumber, p.description, p.manufacturer, p.machineType, p.machine, p.location].join(" ").toLowerCase().includes(f)) : all;
+  const list = $("#list");
+  if (!all.length){ list.innerHTML = '<li class="empty">Nothing received yet. Scan your first part above.</li>'; return; }
+  if (!shown.length){ list.innerHTML = `<li class="empty">No parts match “${esc(filter)}”.</li>`; return; }
+
+  const sv = s => norm(s) ? "0" + norm(s).toLowerCase() : "1";
+  const keyOf = p => [sv(p.manufacturer), sv(p.machineType), sv(p.machine), (p.partNumber || "").toLowerCase()];
+  shown.sort((a, b) => { const ka = keyOf(a[1]), kb = keyOf(b[1]); for (let i = 0; i < 4; i++){ const c = ka[i].localeCompare(kb[i]); if (c) return c; } return 0; });
+  let lastM = null, lastTM = null;
+  list.innerHTML = shown.map(([id, p]) => {
+    const m = norm(p.manufacturer) || "No manufacturer";
+    const tm = [norm(p.machineType) || "No machine type", norm(p.machine)].filter(Boolean).join(", ");
+    let head = "";
+    if (m !== lastM){ head += `<li class="grp-m">${esc(m)}</li>`; lastM = m; lastTM = null; }
+    if (tm !== lastTM){ head += `<li class="grp-t">${esc(tm)}</li>`; lastTM = tm; }
+    const open = id === openId;
+    const sub = [p.description, p.location ? "Bin " + p.location : ""].filter(Boolean).join(", ") || "Received " + fmtDate(p.lastReceived);
+    return head + `<li data-id="${esc(id)}">
+      <button class="row" type="button" aria-expanded="${open}">
+        ${p.thumb ? `<img class="th" src="${esc(p.thumb)}" alt="">` : '<span class="th"></span>'}
+        <span><div class="pn">${esc(p.partNumber)}</div><div class="desc">${esc(sub)}</div></span>
+        <span class="qty">${p.qty || 0}<small>on hand</small></span>
+      </button>
+      ${open ? `<div class="detail">
+        <label>Manufacturer<input data-f="manufacturer" value="${esc(p.manufacturer)}"></label>
+        <div class="two">
+          <label>Machine type<input data-f="machineType" value="${esc(p.machineType)}"></label>
+          <label>Machine<input data-f="machine" value="${esc(p.machine)}"></label>
+        </div>
+        <div class="two">
+          <label>Description<input data-f="description" value="${esc(p.description)}"></label>
+          <label>Bin / location<input data-f="location" value="${esc(p.location)}"></label>
+        </div>
+        <div class="adj">
+          <button type="button" data-adj="-1">Use 1</button>
+          <button type="button" data-adj="1">Add 1</button>
+          <button type="button" data-set>Set count</button>
+          <button type="button" class="del" data-del>Delete part</button>
+        </div>
+        <div class="when">First received ${esc(fmtDate(p.firstReceived))}. Last received ${esc(fmtDate(p.lastReceived))}. Full history is on the Log tab of the sheet.</div>
+      </div>` : ""}
+    </li>`;
+  }).join("");
+}
+
+async function act(body, okMsg){
+  try {
+    const res = await apiPost(body);
+    if (res.deleted) parts.delete(res.deleted);
+    if (res.part) parts.set(res.part.id, res.part);
+    render();
+    if (okMsg) showResult("ok", okMsg, "");
+  } catch (e) {
+    showResult("bad", "Couldn’t save that change.", e.server ? e.message : "Check your connection and try again.");
+  }
+}
+
+$("#list").addEventListener("click", async e => {
+  const li = e.target.closest("li[data-id]"); if (!li) return;
+  const id = li.dataset.id; const p = parts.get(id); if (!p) return;
+  if (e.target.closest(".row")){ openId = openId === id ? null : id; render(); return; }
+  const adj = e.target.closest("[data-adj]");
+  if (adj){
+    const n = parseInt(adj.dataset.adj, 10);
+    if (n < 0 && !(p.qty > 0)) return;
+    adj.disabled = true;
+    return act({ action: "move", partNumber: p.partNumber, delta: n, how: n > 0 ? "manual add" : "used" });
+  }
+  if (e.target.closest("[data-set]")){
+    const v = prompt("Count on hand for " + p.partNumber, p.qty || 0);
+    if (v === null) return;
+    return act({ action: "set", id, qty: Math.max(0, parseInt(v, 10) || 0) });
+  }
+  const del = e.target.closest("[data-del]");
+  if (del){
+    if (del.dataset.armed){ openId = null; return act({ action: "delete", id }, "Deleted " + p.partNumber + "."); }
+    del.dataset.armed = "1"; del.textContent = "Tap again to delete";
+  }
+});
+$("#list").addEventListener("change", e => {
+  const inp = e.target.closest("input[data-f]"); if (!inp) return;
+  const id = inp.closest("li").dataset.id;
+  act({ action: "update", id, fields: { [inp.dataset.f]: inp.value } });
+});
+$("#list").addEventListener("focusout", () => setTimeout(() => { if (pendingRender) requestRender(); }, 0));
+
+$("#photo").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) processPhoto(f); };
+$("#manualForm").onsubmit = e => {
+  e.preventDefault();
+  const v = $("#manualIn").value; $("#manualIn").value = "";
+  receive(v, { how: "typed" });
+};
+$("#search").oninput = e => { filter = e.target.value.trim(); render(); };
+
+$("#exportBtn").onclick = () => {
+  const rows = [["Manufacturer","Machine type","Machine","Part number","Description","Location","On hand","First received","Last received"]];
+  for (const [, p] of parts) rows.push([p.manufacturer, p.machineType, p.machine, p.partNumber, p.description, p.location, p.qty, p.firstReceived, p.lastReceived]);
+  const csv = rows.map(r => r.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = "inventory-" + new Date().toISOString().slice(0, 10) + ".csv";
+  a.click();
+};
+
+/* ---------- setup, name, sharing ---------- */
+$("#nameIn").value = LS.get("partsName");
+$("#nameIn").onchange = () => LS.set("partsName", $("#nameIn").value.trim());
+
+$("#shareBtn").onclick = async () => {
+  const link = location.origin + location.pathname + (API_URL ? "" : "#api=" + encodeURIComponent(api));
+  try { await navigator.clipboard.writeText(link); showResult("ok", "Link copied.", "Send it to anyone who should use the inventory. It connects them to the same sheet."); }
+  catch { prompt("Copy this link and send it:", link); }
+};
+$("#changeApi").onclick = () => { $("#apiIn").value = api; $("#app").classList.add("hide"); $("#setup").classList.remove("hide"); };
+
+$("#apiBtn").onclick = async () => {
+  const url = $("#apiIn").value.trim();
+  const errEl = $("#apiErr");
+  const err = m => { errEl.textContent = m; errEl.classList.remove("hide"); };
+  if (!/^https:\/\/script\.google\.com\/.+\/exec$/.test(url)) return err("That doesn’t look like an Apps Script web app URL. It should start with https://script.google.com and end in /exec.");
+  $("#apiBtn").disabled = true; $("#apiBtn").textContent = "Connecting…";
+  try {
+    await apiGet(url);
+    api = url; LS.set("partsApi", url);
+    errEl.classList.add("hide");
+    start();
+  } catch {
+    err("Couldn’t reach that sheet. Check the deployment is set to Who has access: Anyone, then try again.");
+  } finally {
+    $("#apiBtn").disabled = false; $("#apiBtn").textContent = "Connect";
+  }
+};
+
+let timer = null;
+function start(){
+  $("#setup").classList.add("hide");
+  $("#app").classList.remove("hide");
+  render();
+  refresh();
+  clearInterval(timer);
+  timer = setInterval(() => { if (!document.hidden) refresh(); }, 20000);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+
+if (api) start(); else $("#setup").classList.remove("hide");
+</script>
+</body>
+</html>
