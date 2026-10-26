@@ -51,13 +51,12 @@ const LABEL_PROMPT = 'This photo shows a part, or the label or packaging of a pa
   'Find the part number: the manufacturer part number, MPN, P/N, material number, item number, or catalog number. ' +
   'Do not return a storage location or bin, PO number, order number, customer number, lot or batch number, serial number, date code, weight, or quantity.\n';
 
-function readLabel_(req) {
+function readLabel_(req, trace) {
   const key = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
   if (!key) throw new Error('Label reading isn’t set up yet: add GEMINI_API_KEY under Project Settings → Script Properties.');
   const img = String(req.image || '');
   if (!img || img.length > 6000000) throw new Error('The photo was missing or too large. Take it again.');
   const codes = (Array.isArray(req.codes) ? req.codes : []).map(norm_).filter(String).slice(0, 10);
-  console.log('Label photo ' + Math.round(img.length / 1024) + ' KB, barcodes: ' + codes.length);
   const prompt = LABEL_PROMPT +
     (codes.length ? 'Barcodes in the photo decoded to these values:\n' + codes.map(function (c) { return '- ' + c; }).join('\n') +
       '\nIf one of them is the part number, use that exact value.\n' : '') +
@@ -65,7 +64,7 @@ function readLabel_(req) {
     '{"partNumber":"ABC-1234","description":"short plain description of the part, or empty","manufacturer":"name or empty",' +
     '"machineType":"kind of machine it is for, only if shown on the label, else empty","machine":"machine model or name, only if shown on the label, else empty","confidence":"high"}\n' +
     'confidence is "high", "medium" or "low". If no part number is readable, use "partNumber":"".';
-  const text = gemini_(key, {
+  const text = gemini_(key, trace, {
     contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: 'image/jpeg', data: img } }] }],
     generationConfig: { temperature: 0, responseMimeType: 'application/json' }
   });
@@ -76,7 +75,7 @@ function readLabel_(req) {
     machineType: s(r.machineType, 80), machine: s(r.machine, 80), confidence: s(r.confidence, 10) };
 }
 
-function gemini_(key, body) {
+function gemini_(key, trace, body) {
   // 2.5 models first with thinking off: reading a label doesn't need it and they answer in seconds.
   // Free-tier limits are per model, so when one is busy, rate-limited or retired, try the next.
   // A bad key or bad request fails the same everywhere, so stop on those.
@@ -91,10 +90,9 @@ function gemini_(key, body) {
       method: 'post', contentType: 'application/json', headers: { 'x-goog-api-key': key },
       payload: JSON.stringify(b), muteHttpExceptions: true });
     const code = res.getResponseCode();
-    // Shows in Apps Script → Executions, to see which model answered and how fast
-    console.log(models[i] + ' → HTTP ' + code + ' in ' + (Date.now() - t0) + ' ms');
     let j = {};
     try { j = JSON.parse(res.getContentText()); } catch (e) {}
+    trace.push(models[i] + ' ' + code + ' ' + (Date.now() - t0) + 'ms' + (code === 200 ? '' : ' (' + String((j.error && j.error.message) || '').slice(0, 80) + ')'));
     if (code === 200) {
       const parts = (((j.candidates || [])[0] || {}).content || {}).parts || [];
       return parts.map(function (p) { return p.text || ''; }).join('');
@@ -107,11 +105,27 @@ function gemini_(key, body) {
   throw new Error('Label reader error: ' + last);
 }
 
+// One row per label read in the "Label Log" tab: which models were tried, how fast, and the result
+function logLabel_(req, trace, res, ms) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let t = ss.getSheetByName('Label Log');
+    if (!t) {
+      t = ss.insertSheet('Label Log');
+      t.getRange(1, 1, 1, 6).setValues([['Time', 'By', 'Photo KB', 'Gemini calls', 'Result', 'Total ms']]).setFontWeight('bold');
+      t.setFrozenRows(1);
+    }
+    t.appendRow([new Date(), norm_(req.by).slice(0, 60), Math.round(String(req.image || '').length / 1024), trace.join(' | '),
+      res.ok ? 'part number: ' + (res.partNumber || '(none found)') : 'error: ' + res.error, ms]);
+  } catch (e) {}
+}
+
 // Run this once from the editor: it asks for permission to reach Gemini and checks the key works.
 function testLabelReader() {
   const key = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
   if (!key) throw new Error('Add GEMINI_API_KEY under Project Settings → Script Properties first.');
-  Logger.log('Gemini says: ' + gemini_(key, { contents: [{ parts: [{ text: 'Reply with just the word OK.' }] }] }));
+  const trace = [];
+  Logger.log('Gemini says: ' + gemini_(key, trace, { contents: [{ parts: [{ text: 'Reply with just the word OK.' }] }] }));
 }
 
 function doGet() {
@@ -130,7 +144,11 @@ function doPost(e) {
   try { req = JSON.parse(e.postData.contents); } catch (err) { return out_({ ok: false, error: 'Bad request.' }); }
   // Reading a label doesn't touch the sheet, so it skips the lock and never holds up other people's saves
   if (req.action === 'readLabel') {
-    try { return out_(readLabel_(req)); } catch (err) { return out_({ ok: false, error: String(err.message || err) }); }
+    const trace = [], t0 = Date.now();
+    let res;
+    try { res = readLabel_(req, trace); } catch (err) { res = { ok: false, error: String(err.message || err) }; }
+    logLabel_(req, trace, res, Date.now() - t0);
+    return out_(res);
   }
   const lock = LockService.getScriptLock();
   try {
