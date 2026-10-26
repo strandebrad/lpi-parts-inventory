@@ -230,9 +230,10 @@ async function apiGet(url = api){
   if (!j.ok) throw Object.assign(new Error(j.error || "Load failed"), { server: true });
   return j;
 }
-async function apiPost(body){
+async function apiPost(body, timeoutMs){
   const r = await fetch(api, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ ...body, by: $("#nameIn").value.trim() }) });
+    body: JSON.stringify({ ...body, by: $("#nameIn").value.trim() }),
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined });
   const j = await r.json();
   if (!j.ok) throw Object.assign(new Error(j.error || "Save failed"), { server: true });
   return j;
@@ -614,11 +615,12 @@ async function processPhoto(file){
     showResult("busy", codes.length ? "New part. Reading the label…" : "No barcode found. Reading the label…", "This takes a few seconds.", thumb);
     let r;
     try {
-      const image = canvas.toDataURL("image/jpeg", 0.85).split(",")[1];
-      r = await apiPost({ action: "readLabel", image, codes: codes.map(c => c.text) });
+      const image = toCanvas(img, 1280).toDataURL("image/jpeg", 0.8).split(",")[1];
+      r = await apiPost({ action: "readLabel", image, codes: codes.map(c => c.text) }, 25000);
     } catch (e) {
       if (codes.length) return fromCode("");
-      return askForBox(img, thumb, e.server ? "Couldn’t read the label (" + e.message + ")." : "Couldn’t reach the label reader.");
+      return askForBox(img, thumb, e.server ? "Couldn’t read the label (" + e.message + ")."
+        : e.name === "TimeoutError" ? "The label reader took too long." : "Couldn’t reach the label reader.");
     }
     const pn = norm(r.partNumber);
     if (!pn){

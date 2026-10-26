@@ -76,15 +76,18 @@ function readLabel_(req) {
 }
 
 function gemini_(key, body) {
-  // Newest Flash model first. Free-tier limits are per model, so when one is busy, rate-limited
-  // or renamed, try the next. A bad key or bad request fails the same everywhere, so stop on those.
-  const models = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-flash-lite-latest', 'gemini-2.5-flash-lite'];
+  // 2.5 models first with thinking off: reading a label doesn't need it and they answer in seconds.
+  // Free-tier limits are per model, so when one is busy, rate-limited or retired, try the next.
+  // A bad key or bad request fails the same everywhere, so stop on those.
+  const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-flash-latest', 'gemini-flash-lite-latest'];
   const tryNext = [404, 429, 500, 503, 504];
   let last = '', busy = false;
   for (let i = 0; i < models.length; i++) {
+    const b = JSON.parse(JSON.stringify(body));
+    if (models[i].indexOf('2.5') >= 0) b.generationConfig = Object.assign({}, b.generationConfig, { thinkingConfig: { thinkingBudget: 0 } });
     const res = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/' + models[i] + ':generateContent', {
       method: 'post', contentType: 'application/json', headers: { 'x-goog-api-key': key },
-      payload: JSON.stringify(body), muteHttpExceptions: true });
+      payload: JSON.stringify(b), muteHttpExceptions: true });
     const code = res.getResponseCode();
     let j = {};
     try { j = JSON.parse(res.getContentText()); } catch (e) {}
