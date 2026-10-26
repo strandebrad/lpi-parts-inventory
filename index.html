@@ -164,7 +164,7 @@ li.grp-t{padding:2px 12px 8px;color:var(--muted);font-weight:600;font-size:.92re
   <main id="app" class="hide">
     <label class="scan" id="scanBtn">
       <span class="bars" aria-hidden="true"></span>
-      <span class="txt"><strong>Scan a part</strong><span>Photo of a barcode or QR code</span></span>
+      <span class="txt"><strong>Scan a part</strong><span>Photo of a barcode, QR code, or part number label</span></span>
       <input type="file" id="photo" accept="image/*" capture="environment" class="vh">
     </label>
 
@@ -398,6 +398,45 @@ function detectZxing(canvas){
   } catch { return []; }
 }
 
+/* ---------- label reading (free, on-device OCR) ---------- */
+let ocrWorker = null;
+function loadScript(src){
+  return new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = src; s.onload = res; s.onerror = () => rej(new Error("script"));
+    document.head.appendChild(s);
+  });
+}
+async function getOcr(){
+  if (!ocrWorker) ocrWorker = (async () => {
+    if (!window.Tesseract) await loadScript("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js");
+    return Tesseract.createWorker("eng");
+  })().catch(e => { ocrWorker = null; throw e; });
+  return ocrWorker;
+}
+const PN_LABEL = /\b(?:MFG\.?\s*|MFR\.?\s*)?(?:P\s*\/\s*N|PN|PART\s*(?:NO|NUMBER|NUM|#)|MPN|CAT(?:ALOG)?\.?\s*(?:NO|NUMBER|#)|ITEM\s*(?:NO|NUMBER|#)|MODEL\s*(?:NO|NUMBER|#)?|ORDER\s*(?:NO|CODE)|TYPE)(?![A-Z])\.?\s*[:#.\-]?\s*([A-Z0-9][A-Z0-9\-\/.]{2,})/i;
+const NOT_PN = /\b(?:LOT|BATCH|S\s*\/\s*N|SN|SERIAL|DATE|QTY|QUANTITY|PO|P\.O\.|EXP|MFD|WEIGHT|MADE IN)\b/i;
+function partNumbersFrom(text){
+  const clean = t => t.replace(/^[^A-Z0-9]+|[^A-Z0-9]+$/gi, "");
+  const looksLike = t => t.length >= 4 && t.length <= 40 && /\d/.test(t) && /^[A-Z0-9][A-Z0-9\-\/.]*$/i.test(t)
+    && !/^\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}$/.test(t);
+  const labelled = [], loose = [];
+  for (const line of text.split(/\n+/).map(norm).filter(Boolean)){
+    const m = line.match(PN_LABEL);
+    if (m && looksLike(clean(m[1]))){ labelled.push(clean(m[1])); continue; }
+    if (NOT_PN.test(line)) continue;
+    for (const w of line.split(/\s+/).map(clean)) if (looksLike(w)) loose.push(w);
+  }
+  // letters + digits beats digits only, then longer first
+  loose.sort((a, b) => (/[A-Z]/i.test(b) - /[A-Z]/i.test(a)) || b.length - a.length);
+  return [...new Set([...labelled, ...loose].map(s => s.toUpperCase()))];
+}
+async function readLabel(canvas){
+  const worker = await getOcr();
+  const { data } = await worker.recognize(canvas);
+  return partNumbersFrom(data.text || "");
+}
+
 async function processPhoto(file){
   $("#photo").disabled = true;
   try {
@@ -411,7 +450,16 @@ async function processPhoto(file){
     if (!codes.length) codes = detectZxing(canvas);
     codes = codes.map(c => ({ ...c, text: norm(c.text) })).filter((c, i, a) => c.text && a.findIndex(x => x.text === c.text) === i);
     if (!codes.length){
-      receive("", { thumb, how: "typed", note: "No barcode or QR code found. Type the part number, or retake the photo closer." });
+      showResult("busy", "No barcode found. Reading the label…", ocrWorker ? "This takes a few seconds." : "The first read on this phone takes a little longer.", thumb);
+      let found = [];
+      try { found = await readLabel(toCanvas(img, 2000)); } catch {}
+      if (!found.length){
+        receive("", { thumb, how: "typed", note: "Couldn’t read a part number. Type it, or retake the photo closer to the label." });
+        return;
+      }
+      const pick = found.find(t => parts.has(idFor(t))) || found[0];
+      receive(pick, { thumb, how: "label", others: found.filter(t => t !== pick).slice(0, 6),
+        note: "Read from the label. Check the part number is right, or tap another one above." });
       return;
     }
     const chosen = codes.find(c => parts.has(idFor(c.text))) || codes[0];
