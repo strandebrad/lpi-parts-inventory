@@ -76,9 +76,11 @@ function readLabel_(req) {
 }
 
 function gemini_(key, body) {
-  // Newest Flash model first; fall back if Google has renamed it
-  const models = ['gemini-flash-latest', 'gemini-2.5-flash'];
-  let last = '';
+  // Newest Flash model first. Free-tier limits are per model, so when one is busy, rate-limited
+  // or renamed, try the next. A bad key or bad request fails the same everywhere, so stop on those.
+  const models = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-flash-lite-latest', 'gemini-2.5-flash-lite'];
+  const tryNext = [404, 429, 500, 503, 504];
+  let last = '', busy = false;
   for (let i = 0; i < models.length; i++) {
     const res = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/' + models[i] + ':generateContent', {
       method: 'post', contentType: 'application/json', headers: { 'x-goog-api-key': key },
@@ -91,9 +93,10 @@ function gemini_(key, body) {
       return parts.map(function (p) { return p.text || ''; }).join('');
     }
     last = (j.error && j.error.message) || ('HTTP ' + code);
-    if (code === 429) throw new Error('Too many label reads right now. Wait a minute and scan again.');
-    if (code !== 404) break;
+    if (code !== 404) busy = true;
+    if (tryNext.indexOf(code) < 0) { busy = false; break; }
   }
+  if (busy) throw new Error('The label reader is busy right now. Wait a minute and scan again.');
   throw new Error('Label reader error: ' + last);
 }
 
