@@ -93,6 +93,11 @@ h1{font:700 2rem/1 "Barlow Condensed","Arial Narrow",sans-serif;margin:0;letter-
 .rv-act button{height:54px;border-radius:6px;font:700 1.4rem "Barlow Condensed","Arial Narrow",sans-serif;cursor:pointer;border:2px solid var(--ink);background:none;color:var(--ink)}
 .rv-act .recv{background:var(--signal);color:var(--signal-ink);border-color:var(--signal)}
 .rv-cancel{justify-self:center;border:0;background:none;color:var(--muted);text-decoration:underline;cursor:pointer;padding:6px 12px}
+.crop{display:none;margin-top:14px;background:var(--surface);border:1px solid var(--line);border-top:6px solid var(--signal);border-radius:6px;padding:14px;gap:12px}
+.crop.show{display:grid}
+.crop-stage{position:relative;touch-action:none;user-select:none;-webkit-user-select:none;border-radius:4px;overflow:hidden;cursor:crosshair}
+.crop-stage img{display:block;width:100%;height:auto;pointer-events:none}
+.crop-box{position:absolute;border:3px solid var(--signal);box-shadow:0 0 0 9999px rgba(0,0,0,.45);pointer-events:none}
 .spinner{width:20px;height:20px;border:3px solid var(--line);border-top-color:var(--signal);border-radius:50%;animation:spin .8s linear infinite;flex:none}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.spinner{animation-duration:3s}}
@@ -175,6 +180,7 @@ li.grp-t{padding:2px 12px 8px;color:var(--muted);font-weight:600;font-size:.92re
       </form>
     </div>
 
+    <div class="crop" id="crop"></div>
     <div class="review" id="review"></div>
     <div class="result" id="result" role="status" aria-live="polite"></div>
 
@@ -256,6 +262,7 @@ function receive(pnRaw, info = {}){
   if (!pn && !info.thumb) return;
   const prev = parts.get(idFor(pn));
   pending = { info };
+  closeCrop();
   $("#result").className = "result";
   const v = (a, b) => esc(a || b || "");
   const el = $("#review");
@@ -410,18 +417,24 @@ function loadScript(src){
 async function getOcr(){
   if (!ocrWorker) ocrWorker = (async () => {
     if (!window.Tesseract) await loadScript("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js");
-    return Tesseract.createWorker("eng");
+    const w = await Tesseract.createWorker("eng");
+    await w.setParameters({ tessedit_pageseg_mode: "6" });
+    return w;
   })().catch(e => { ocrWorker = null; throw e; });
   return ocrWorker;
 }
 const PN_LABEL = /\b(?:MFG\.?\s*|MFR\.?\s*)?(?:P\s*\/\s*N|PN|PART\s*(?:NO|NUMBER|NUM|#)|MPN|MATERIAL(?:\s*(?:NO|NUMBER|#))?|MAT'?L|CAT(?:ALOG)?\.?\s*(?:NO|NUMBER|#)|ITEM\s*(?:NO|NUMBER|#)|MODEL\s*(?:NO|NUMBER|#)?|ORDER\s*CODE|TYPE)(?![A-Z])\.?\s*[:#.\-]?\s*([A-Z0-9][A-Z0-9\-\/.]{2,})/i;
-// Lines about orders, shipping, dates and so on never hold the part number
-const NOT_PN = /\b(?:LOT|BATCH|S\s*\/\s*N|SN|SERIAL|DATE|QTY|QUANTITY|PO|P\.O\.|PO#|EXP|MFD|WEIGHT|WGHT|MADE IN|ORDER|CUSTOMER|WHSE|LOCATION|SHIP|ROUTE|PACK|COMMENTS?|MESSAGE|INVOICE|TRACKING)\b/i;
 const cleanTok = t => t.replace(/^[^A-Z0-9]+|[^A-Z0-9]+$/gi, "");
 // Has a digit, no odd characters, not a date; all-digit values need 6+ digits
 const looksLikePn = t => t.length >= 4 && t.length <= 40 && /\d/.test(t) && /^[A-Z0-9][A-Z0-9\-\/.]*$/i.test(t)
   && !/^\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}$/.test(t) && (/[A-Z]/i.test(t) || t.replace(/\D/g, "").length >= 6);
 // lines: [{ text, words: [{ text, h }] }] from the OCR. Returns candidates, best first.
+// O and I/l between or after digits are almost always misread 0 and 1
+const fixDigits = t => t.replace(/(?<=\d)[Oo](?=\d)|(?<=\d\d)[Oo]$/g, "0").replace(/(?<=\d)[Il|](?=\d)|(?<=\d\d)[Il|]$/g, "1");
+// A number the reader split at a gap: the next piece is the same print size and contains a digit
+const continues = (a, b) => /\d/.test(b.t) && /^[A-Z0-9\-\/.]+$/i.test(b.t)
+  && (!a.h || !b.h || Math.abs(a.h - b.h) <= 0.3 * Math.max(a.h, b.h));
+// lines: [{ text, words: [{ text, h }] }] read from the box the user drew. Returns candidates, best first.
 function partNumbersFrom(lines){
   const score = new Map();
   const add = (t, s) => { t = t.toUpperCase(); score.set(t, Math.max(score.get(t) || 0, s)); };
@@ -429,14 +442,20 @@ function partNumbersFrom(lines){
   for (const line of lines){
     const text = norm(line.text);
     if (!text) continue;
-    const m = text.match(PN_LABEL);
-    if (m && looksLikePn(cleanTok(m[1]))) add(cleanTok(m[1]), 1000);
-    if (NOT_PN.test(text)) continue;
-    for (const w of (line.words?.length ? line.words : text.split(/\s+/).map(t => ({ text: t })))){
-      const t = cleanTok(w.text);
-      if (!looksLikePn(t)) continue;
-      const letters = /[A-Z]/i.test(t), digits = t.replace(/\D/g, "").length;
-      add(t, (letters ? 100 : 0) + (digits >= 6 ? 50 : 0) + Math.min(t.length, 20) * 2 + 40 * (w.h || 0) / maxH);
+    const m = text.match(PN_LABEL), labelled = m ? fixDigits(cleanTok(m[1])).toUpperCase() : "";
+    const words = (line.words?.length ? line.words : text.split(/\s+/).map(t => ({ text: t })))
+      .map(w => ({ t: fixDigits(cleanTok(w.text)), h: w.h || 0 })).filter(w => w.t);
+    for (let i = 0; i < words.length; i++){
+      // Try the word alone, then joined with following pieces
+      let t = words[i].t;
+      for (let j = i; j < words.length && j <= i + 6; j++){
+        if (j > i){ if (!continues(words[j - 1], words[j])) break; t += words[j].t; }
+        if (!looksLikePn(t)) continue;
+        const letters = /[A-Z]/i.test(t), digits = t.replace(/\D/g, "").length;
+        let s = (letters ? 100 : 0) + (digits >= 6 ? 50 : 0) + Math.min(t.length, 20) * 2 + 80 * words[i].h / maxH;
+        if (labelled && t.toUpperCase().startsWith(labelled)) s += 1000;
+        add(t, s);
+      }
     }
   }
   return [...score].sort((a, b) => b[1] - a[1]).map(([t]) => t);
@@ -448,14 +467,135 @@ function dropHighlights(canvas){
   x.putImageData(d, 0, 0);
   return canvas;
 }
+// Finds how far the text is tilted (at the right angle, dark pixels pile up into tight rows of text)
+// and how tall the biggest row of text is, in canvas pixels
+function textLayout(canvas){
+  const k = Math.min(1, 700 / Math.max(canvas.width, canvas.height));
+  const w = Math.round(canvas.width * k), h = Math.round(canvas.height * k);
+  const c = document.createElement("canvas"); c.width = w; c.height = h;
+  c.getContext("2d").drawImage(canvas, 0, 0, w, h);
+  const a = c.getContext("2d").getImageData(0, 0, w, h).data;
+  let sum = 0;
+  for (let i = 0; i < a.length; i += 4) sum += a[i];
+  const dark = (sum / (a.length / 4)) * 0.6, xs = [], ys = [];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (a[(y * w + x) * 4] < dark){ xs.push(x - w / 2); ys.push(y); }
+  if (xs.length < 200) return { deg: 0, lineH: 0 };
+  const profile = deg => {
+    const t = Math.tan(deg * Math.PI / 180), rows = new Float64Array(h * 2 + 2);
+    for (let i = 0; i < xs.length; i++){ const r = Math.round(ys[i] - xs[i] * t) + h; if (r >= 0 && r < rows.length) rows[r]++; }
+    return rows;
+  };
+  let best = 0, bestScore = -1;
+  for (let deg = -10; deg <= 10; deg += 0.5){
+    const rows = profile(deg);
+    let sc = 0;
+    for (const v of rows) sc += v * v;
+    if (sc > bestScore){ bestScore = sc; best = deg; }
+  }
+  // Tallest run of rows that hold a fair share of ink = height of the biggest text line
+  const rows = profile(best), on = 0.2 * Math.max(...rows);
+  let lineH = 0, run = 0;
+  for (const v of rows){ run = v > on ? run + 1 : 0; lineH = Math.max(lineH, run); }
+  return { deg: best, lineH: lineH / k };
+}
+function scaled(canvas, f){
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(canvas.width * f)); c.height = Math.max(1, Math.round(canvas.height * f));
+  const x = c.getContext("2d");
+  x.imageSmoothingQuality = "high";
+  x.drawImage(canvas, 0, 0, c.width, c.height);
+  return c;
+}
+function rotated(canvas, deg){
+  const r = deg * Math.PI / 180, cos = Math.abs(Math.cos(r)), sin = Math.abs(Math.sin(r));
+  const c = document.createElement("canvas");
+  c.width = Math.round(canvas.width * cos + canvas.height * sin); c.height = Math.round(canvas.width * sin + canvas.height * cos);
+  const x = c.getContext("2d");
+  x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height);
+  x.translate(c.width / 2, c.height / 2); x.rotate(-r);
+  x.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+  return c;
+}
 async function readLabel(canvas){
   const worker = await getOcr();
-  const { data } = await worker.recognize(dropHighlights(canvas));
+  let c = dropHighlights(canvas);
+  // The reader does best with letters about 40px tall, so resize to that, then straighten
+  const { deg, lineH } = textLayout(c);
+  const f = lineH ? Math.min(3, Math.max(0.25, 40 / lineH)) : 1;
+  if (Math.abs(f - 1) > 0.15) c = scaled(c, f);
+  if (Math.abs(deg) >= 1) c = rotated(c, deg);
+  const { data } = await worker.recognize(c);
   return partNumbersFrom((data.lines || []).map(l => ({ text: l.text, words: (l.words || []).map(w => ({ text: w.text, h: w.bbox.y1 - w.bbox.y0 })) })));
+}
+
+// The boxed part of the full-size photo
+function cropCanvas(img, box){
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(box.w)); c.height = Math.max(1, Math.round(box.h));
+  c.getContext("2d").drawImage(img, box.x, box.y, box.w, box.h, 0, 0, c.width, c.height);
+  return c;
+}
+function closeCrop(){
+  $("#crop").classList.remove("show");
+  $("#crop").innerHTML = "";
+}
+// No barcode: the user drags a box around the part number, and only that is read
+function askForBox(img, thumb){
+  getOcr().catch(() => {});
+  $("#result").className = "result";
+  const el = $("#crop");
+  el.innerHTML = `
+    <b>No barcode found. Drag a box around the part number.</b>
+    <div class="crop-stage" id="cropStage"><img src="${esc(img.src)}" alt="Photo of the part label"><div class="crop-box hide" id="cropBox"></div></div>
+    <div class="rv-act">
+      <button type="button" class="recv" id="cropRead" disabled>Read it</button>
+      <button type="button" id="cropType">Type it</button>
+    </div>
+    <button type="button" class="rv-cancel" id="cropCancel">Cancel</button>`;
+  el.classList.add("show");
+  const stage = $("#cropStage");
+  let box = null, start = null;
+  const at = e => {
+    const r = stage.getBoundingClientRect();
+    return { x: Math.min(Math.max(e.clientX - r.left, 0), r.width), y: Math.min(Math.max(e.clientY - r.top, 0), r.height) };
+  };
+  const draw = () => {
+    const b = $("#cropBox");
+    b.classList.toggle("hide", !box);
+    if (box) Object.assign(b.style, { left: box.x + "px", top: box.y + "px", width: box.w + "px", height: box.h + "px" });
+    $("#cropRead").disabled = !box || box.w < 12 || box.h < 6;
+  };
+  stage.onpointerdown = e => { e.preventDefault(); stage.setPointerCapture(e.pointerId); start = at(e); box = null; draw(); };
+  stage.onpointermove = e => {
+    if (!start) return;
+    const p = at(e);
+    box = { x: Math.min(start.x, p.x), y: Math.min(start.y, p.y), w: Math.abs(p.x - start.x), h: Math.abs(p.y - start.y) };
+    draw();
+  };
+  stage.onpointerup = stage.onpointercancel = () => { start = null; };
+  $("#cropRead").onclick = async () => {
+    const k = img.naturalWidth / stage.getBoundingClientRect().width;
+    const sel = { x: box.x * k, y: box.y * k, w: box.w * k, h: box.h * k };
+    closeCrop();
+    showResult("busy", "Reading the part number…", ocrWorker ? "This takes a few seconds." : "The first read on this phone takes a little longer.", thumb);
+    let found = [];
+    try { found = await readLabel(cropCanvas(img, sel)); } catch {}
+    if (!found.length){
+      receive("", { thumb, how: "typed", note: "Couldn’t read a part number there. Type it, or take the photo again closer to the label." });
+      return;
+    }
+    const pick = found.find(t => parts.has(idFor(t))) || found[0];
+    receive(pick, { thumb, how: "label", others: found.filter(t => t !== pick).slice(0, 6),
+      note: "Read from the label. Check the part number is right." });
+  };
+  $("#cropType").onclick = () => { closeCrop(); receive("", { thumb, how: "typed" }); };
+  $("#cropCancel").onclick = closeCrop;
+  el.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
 async function processPhoto(file){
   $("#photo").disabled = true;
+  closeCrop();
   try {
     let img;
     try { img = await loadImage(file); }
@@ -466,19 +606,7 @@ async function processPhoto(file){
     let codes = await detectNative(canvas);
     if (!codes.length) codes = detectZxing(canvas);
     codes = codes.map(c => ({ ...c, text: norm(c.text) })).filter((c, i, a) => c.text && a.findIndex(x => x.text === c.text) === i);
-    if (!codes.length){
-      showResult("busy", "No barcode found. Reading the label…", ocrWorker ? "This takes a few seconds." : "The first read on this phone takes a little longer.", thumb);
-      let found = [];
-      try { found = await readLabel(toCanvas(img, 2000)); } catch {}
-      if (!found.length){
-        receive("", { thumb, how: "typed", note: "Couldn’t read a part number. Type it, or retake the photo closer to the label." });
-        return;
-      }
-      const pick = found.find(t => parts.has(idFor(t))) || found[0];
-      receive(pick, { thumb, how: "label", others: found.filter(t => t !== pick).slice(0, 6),
-        note: "Read from the label. Check the part number is right, or tap another one above." });
-      return;
-    }
+    if (!codes.length){ askForBox(img, thumb); return; }
     const chosen = codes.find(c => parts.has(idFor(c.text))) || codes[0];
     receive(chosen.text, { thumb, how: chosen.format, others: codes.filter(c => c !== chosen).map(c => c.text) });
   } finally {
