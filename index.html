@@ -273,13 +273,13 @@ function receive(pnRaw, info = {}){
     </div>
     <label>Part number<input id="rvPn" class="pnIn" value="${esc(pn)}" autocomplete="off"></label>
     ${info.others?.length ? `<div class="chips"><span>Other codes in the photo:</span>${info.others.map(o => `<button type="button" data-code="${esc(o)}">${esc(o)}</button>`).join("")}</div>` : ""}
-    <label>Manufacturer<input id="rvMfr" list="dlMfr" value="${v(prev?.manufacturer)}"></label>
+    <label>Manufacturer<input id="rvMfr" list="dlMfr" value="${v(prev?.manufacturer, info.manufacturer)}"></label>
     <div class="two">
-      <label>Machine type<input id="rvType" list="dlType" value="${v(prev?.machineType)}"></label>
-      <label>Machine<input id="rvMach" list="dlMach" value="${v(prev?.machine)}"></label>
+      <label>Machine type<input id="rvType" list="dlType" value="${v(prev?.machineType, info.machineType)}"></label>
+      <label>Machine<input id="rvMach" list="dlMach" value="${v(prev?.machine, info.machine)}"></label>
     </div>
     <div class="two">
-      <label>Description<input id="rvDesc" value="${v(prev?.description)}"></label>
+      <label>Description<input id="rvDesc" value="${v(prev?.description, info.description)}"></label>
       <label>Bin / location<input id="rvLoc" value="${v(prev?.location)}"></label>
     </div>
     ${datalists()}
@@ -540,12 +540,12 @@ function closeCrop(){
   $("#crop").innerHTML = "";
 }
 // No barcode: the user drags a box around the part number, and only that is read
-function askForBox(img, thumb){
+function askForBox(img, thumb, why = "No barcode found."){
   getOcr().catch(() => {});
   $("#result").className = "result";
   const el = $("#crop");
   el.innerHTML = `
-    <b>No barcode found. Drag a box around the part number.</b>
+    <b>${esc(why)} Drag a box around the part number.</b>
     <div class="crop-stage" id="cropStage"><img src="${esc(img.src)}" alt="Photo of the part label"><div class="crop-box hide" id="cropBox"></div></div>
     <div class="rv-act">
       <button type="button" class="recv" id="cropRead" disabled>Read it</button>
@@ -606,9 +606,28 @@ async function processPhoto(file){
     let codes = await detectNative(canvas);
     if (!codes.length) codes = detectZxing(canvas);
     codes = codes.map(c => ({ ...c, text: norm(c.text) })).filter((c, i, a) => c.text && a.findIndex(x => x.text === c.text) === i);
-    if (!codes.length){ askForBox(img, thumb); return; }
-    const chosen = codes.find(c => parts.has(idFor(c.text))) || codes[0];
-    receive(chosen.text, { thumb, how: chosen.format, others: codes.filter(c => c !== chosen).map(c => c.text) });
+    // A part we already have: open it straight away
+    const known = codes.find(c => parts.has(idFor(c.text)));
+    if (known){ receive(known.text, { thumb, how: known.format, others: codes.filter(c => c !== known).map(c => c.text) }); return; }
+    const fromCode = note => receive(codes[0].text, { thumb, how: codes[0].format, others: codes.slice(1).map(c => c.text), note });
+    // Otherwise the sheet's script asks Gemini to read the label (and pick among any barcodes)
+    showResult("busy", codes.length ? "New part. Reading the label…" : "No barcode found. Reading the label…", "This takes a few seconds.", thumb);
+    let r;
+    try {
+      const image = canvas.toDataURL("image/jpeg", 0.85).split(",")[1];
+      r = await apiPost({ action: "readLabel", image, codes: codes.map(c => c.text) });
+    } catch (e) {
+      if (codes.length) return fromCode("");
+      return askForBox(img, thumb, e.server ? "Couldn’t read the label (" + e.message + ")." : "Couldn’t reach the label reader.");
+    }
+    const pn = norm(r.partNumber);
+    if (!pn){
+      if (codes.length) return fromCode("");
+      return askForBox(img, thumb, "Couldn’t find a part number in that photo.");
+    }
+    receive(pn, { thumb, how: "label", others: codes.map(c => c.text).filter(t => idFor(t) !== idFor(pn)),
+      description: r.description, manufacturer: r.manufacturer, machineType: r.machineType, machine: r.machine,
+      note: r.confidence === "low" ? "Low confidence read. Double-check the part number." : "" });
   } finally {
     $("#photo").disabled = false;
   }
