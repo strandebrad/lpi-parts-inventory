@@ -76,10 +76,10 @@ function readLabel_(req, trace) {
 }
 
 function gemini_(key, trace, body) {
-  // 2.5 models first with thinking off: reading a label doesn't need it and they answer in seconds.
-  // Free-tier limits are per model, so when one is busy, rate-limited or retired, try the next.
-  // A bad key or bad request fails the same everywhere, so stop on those.
-  const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-flash-latest', 'gemini-flash-lite-latest'];
+  // Flash-Lite first: it reads labels well and is the least often overloaded. Free-tier limits are
+  // per model, so when one is busy, rate-limited or retired, try the next. The 2.5 models (thinking
+  // off) are a last resort for older keys. A bad key or bad request fails the same everywhere, so stop on those.
+  const models = ['gemini-flash-lite-latest', 'gemini-flash-latest', 'gemini-2.5-flash-lite', 'gemini-2.5-flash'];
   const tryNext = [404, 429, 500, 503, 504];
   let last = '', busy = false;
   for (let i = 0; i < models.length; i++) {
