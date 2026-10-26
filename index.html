@@ -615,7 +615,7 @@ async function processPhoto(file){
     showResult("busy", codes.length ? "New part. Reading the label…" : "No barcode found. Reading the label…", "This takes a few seconds.", thumb);
     let r;
     try {
-      const image = toCanvas(img, 1280).toDataURL("image/jpeg", 0.8).split(",")[1];
+      const image = toCanvas(img, 1024).toDataURL("image/jpeg", 0.75).split(",")[1];
       r = await apiPost({ action: "readLabel", image, codes: codes.map(c => c.text) }, 45000);
     } catch (e) {
       if (codes.length) return fromCode("");

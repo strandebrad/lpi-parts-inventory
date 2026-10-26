@@ -105,8 +105,9 @@ function gemini_(key, trace, body) {
   throw new Error('Label reader error: ' + last);
 }
 
-// One row per label read in the "Label Log" tab: which models were tried, how fast, and the result
-function logLabel_(req, trace, res, ms) {
+// One row per label read in the "Label Log" tab: which models were tried, how fast, and the result.
+// Written when the photo arrives, then filled in when the read finishes. Returns the row number.
+function logLabel_(req, trace, res, ms, row) {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     let t = ss.getSheetByName('Label Log');
@@ -115,9 +116,13 @@ function logLabel_(req, trace, res, ms) {
       t.getRange(1, 1, 1, 6).setValues([['Time', 'By', 'Photo KB', 'Gemini calls', 'Result', 'Total ms']]).setFontWeight('bold');
       t.setFrozenRows(1);
     }
-    t.appendRow([new Date(), norm_(req.by).slice(0, 60), Math.round(String(req.image || '').length / 1024), trace.join(' | '),
-      res.ok ? 'part number: ' + (res.partNumber || '(none found)') : 'error: ' + res.error, ms]);
-  } catch (e) {}
+    const values = [new Date(), norm_(req.by).slice(0, 60), Math.round(String(req.image || '').length / 1024), trace.join(' | '),
+      res.ok ? 'part number: ' + (res.partNumber || '(none found)') : 'error: ' + res.error, ms];
+    if (row) { t.getRange(row, 1, 1, values.length).setValues([values]); return row; }
+    t.appendRow(values);
+    SpreadsheetApp.flush();
+    return t.getLastRow();
+  } catch (e) { return 0; }
 }
 
 // Run this once from the editor: it asks for permission to reach Gemini and checks the key works.
@@ -145,9 +150,10 @@ function doPost(e) {
   // Reading a label doesn't touch the sheet, so it skips the lock and never holds up other people's saves
   if (req.action === 'readLabel') {
     const trace = [], t0 = Date.now();
+    const row = logLabel_(req, ['started'], { ok: true, partNumber: '(still reading…)' }, 0);
     let res;
     try { res = readLabel_(req, trace); } catch (err) { res = { ok: false, error: String(err.message || err) }; }
-    logLabel_(req, trace, res, Date.now() - t0);
+    logLabel_(req, trace, res, Date.now() - t0, row);
     return out_(res);
   }
   const lock = LockService.getScriptLock();
