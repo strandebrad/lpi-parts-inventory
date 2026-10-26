@@ -57,6 +57,7 @@ function readLabel_(req) {
   const img = String(req.image || '');
   if (!img || img.length > 6000000) throw new Error('The photo was missing or too large. Take it again.');
   const codes = (Array.isArray(req.codes) ? req.codes : []).map(norm_).filter(String).slice(0, 10);
+  console.log('Label photo ' + Math.round(img.length / 1024) + ' KB, barcodes: ' + codes.length);
   const prompt = LABEL_PROMPT +
     (codes.length ? 'Barcodes in the photo decoded to these values:\n' + codes.map(function (c) { return '- ' + c; }).join('\n') +
       '\nIf one of them is the part number, use that exact value.\n' : '') +
@@ -85,10 +86,13 @@ function gemini_(key, body) {
   for (let i = 0; i < models.length; i++) {
     const b = JSON.parse(JSON.stringify(body));
     if (models[i].indexOf('2.5') >= 0) b.generationConfig = Object.assign({}, b.generationConfig, { thinkingConfig: { thinkingBudget: 0 } });
+    const t0 = Date.now();
     const res = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/' + models[i] + ':generateContent', {
       method: 'post', contentType: 'application/json', headers: { 'x-goog-api-key': key },
       payload: JSON.stringify(b), muteHttpExceptions: true });
     const code = res.getResponseCode();
+    // Shows in Apps Script → Executions, to see which model answered and how fast
+    console.log(models[i] + ' → HTTP ' + code + ' in ' + (Date.now() - t0) + ' ms');
     let j = {};
     try { j = JSON.parse(res.getContentText()); } catch (e) {}
     if (code === 200) {

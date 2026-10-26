@@ -616,7 +616,7 @@ async function processPhoto(file){
     let r;
     try {
       const image = toCanvas(img, 1280).toDataURL("image/jpeg", 0.8).split(",")[1];
-      r = await apiPost({ action: "readLabel", image, codes: codes.map(c => c.text) }, 25000);
+      r = await apiPost({ action: "readLabel", image, codes: codes.map(c => c.text) }, 45000);
     } catch (e) {
       if (codes.length) return fromCode("");
       return askForBox(img, thumb, e.server ? "Couldn’t read the label (" + e.message + ")."
