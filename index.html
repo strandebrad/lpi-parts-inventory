@@ -414,27 +414,44 @@ async function getOcr(){
   })().catch(e => { ocrWorker = null; throw e; });
   return ocrWorker;
 }
-const PN_LABEL = /\b(?:MFG\.?\s*|MFR\.?\s*)?(?:P\s*\/\s*N|PN|PART\s*(?:NO|NUMBER|NUM|#)|MPN|CAT(?:ALOG)?\.?\s*(?:NO|NUMBER|#)|ITEM\s*(?:NO|NUMBER|#)|MODEL\s*(?:NO|NUMBER|#)?|ORDER\s*(?:NO|CODE)|TYPE)(?![A-Z])\.?\s*[:#.\-]?\s*([A-Z0-9][A-Z0-9\-\/.]{2,})/i;
-const NOT_PN = /\b(?:LOT|BATCH|S\s*\/\s*N|SN|SERIAL|DATE|QTY|QUANTITY|PO|P\.O\.|EXP|MFD|WEIGHT|MADE IN)\b/i;
-function partNumbersFrom(text){
-  const clean = t => t.replace(/^[^A-Z0-9]+|[^A-Z0-9]+$/gi, "");
-  const looksLike = t => t.length >= 4 && t.length <= 40 && /\d/.test(t) && /^[A-Z0-9][A-Z0-9\-\/.]*$/i.test(t)
-    && !/^\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}$/.test(t);
-  const labelled = [], loose = [];
-  for (const line of text.split(/\n+/).map(norm).filter(Boolean)){
-    const m = line.match(PN_LABEL);
-    if (m && looksLike(clean(m[1]))){ labelled.push(clean(m[1])); continue; }
-    if (NOT_PN.test(line)) continue;
-    for (const w of line.split(/\s+/).map(clean)) if (looksLike(w)) loose.push(w);
+const PN_LABEL = /\b(?:MFG\.?\s*|MFR\.?\s*)?(?:P\s*\/\s*N|PN|PART\s*(?:NO|NUMBER|NUM|#)|MPN|MATERIAL(?:\s*(?:NO|NUMBER|#))?|MAT'?L|CAT(?:ALOG)?\.?\s*(?:NO|NUMBER|#)|ITEM\s*(?:NO|NUMBER|#)|MODEL\s*(?:NO|NUMBER|#)?|ORDER\s*CODE|TYPE)(?![A-Z])\.?\s*[:#.\-]?\s*([A-Z0-9][A-Z0-9\-\/.]{2,})/i;
+// Lines about orders, shipping, dates and so on never hold the part number
+const NOT_PN = /\b(?:LOT|BATCH|S\s*\/\s*N|SN|SERIAL|DATE|QTY|QUANTITY|PO|P\.O\.|PO#|EXP|MFD|WEIGHT|WGHT|MADE IN|ORDER|CUSTOMER|WHSE|LOCATION|SHIP|ROUTE|PACK|COMMENTS?|MESSAGE|INVOICE|TRACKING)\b/i;
+const cleanTok = t => t.replace(/^[^A-Z0-9]+|[^A-Z0-9]+$/gi, "");
+// Has a digit, no odd characters, not a date; all-digit values need 6+ digits
+const looksLikePn = t => t.length >= 4 && t.length <= 40 && /\d/.test(t) && /^[A-Z0-9][A-Z0-9\-\/.]*$/i.test(t)
+  && !/^\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}$/.test(t) && (/[A-Z]/i.test(t) || t.replace(/\D/g, "").length >= 6);
+// lines: [{ text, words: [{ text, h }] }] from the OCR. Returns candidates, best first.
+function partNumbersFrom(lines){
+  const score = new Map();
+  const add = (t, s) => { t = t.toUpperCase(); score.set(t, Math.max(score.get(t) || 0, s)); };
+  const maxH = Math.max(1, ...lines.flatMap(l => (l.words || []).map(w => w.h || 0)));
+  for (const line of lines){
+    const text = norm(line.text);
+    if (!text) continue;
+    const m = text.match(PN_LABEL);
+    if (m && looksLikePn(cleanTok(m[1]))) add(cleanTok(m[1]), 1000);
+    if (NOT_PN.test(text)) continue;
+    for (const w of (line.words?.length ? line.words : text.split(/\s+/).map(t => ({ text: t })))){
+      const t = cleanTok(w.text);
+      if (!looksLikePn(t)) continue;
+      const letters = /[A-Z]/i.test(t), digits = t.replace(/\D/g, "").length;
+      add(t, (letters ? 100 : 0) + (digits >= 6 ? 50 : 0) + Math.min(t.length, 20) * 2 + 40 * (w.h || 0) / maxH);
+    }
   }
-  // letters + digits beats digits only, then longer first
-  loose.sort((a, b) => (/[A-Z]/i.test(b) - /[A-Z]/i.test(a)) || b.length - a.length);
-  return [...new Set([...labelled, ...loose].map(s => s.toUpperCase()))];
+  return [...score].sort((a, b) => b[1] - a[1]).map(([t]) => t);
+}
+// Reading the red channel turns red or yellow highlighter stripes white, leaving the black print
+function dropHighlights(canvas){
+  const x = canvas.getContext("2d"), d = x.getImageData(0, 0, canvas.width, canvas.height), a = d.data;
+  for (let i = 0; i < a.length; i += 4) a[i + 1] = a[i + 2] = a[i];
+  x.putImageData(d, 0, 0);
+  return canvas;
 }
 async function readLabel(canvas){
   const worker = await getOcr();
-  const { data } = await worker.recognize(canvas);
-  return partNumbersFrom(data.text || "");
+  const { data } = await worker.recognize(dropHighlights(canvas));
+  return partNumbersFrom((data.lines || []).map(l => ({ text: l.text, words: (l.words || []).map(w => ({ text: w.text, h: w.bbox.y1 - w.bbox.y0 })) })));
 }
 
 async function processPhoto(file){
